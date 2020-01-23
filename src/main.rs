@@ -35,11 +35,14 @@ extern crate fern;
 extern crate rand;
 extern crate url;
 
+use ipc::*;
 use std::fs;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::thread;
 
 use clap::{App, Arg};
 use cursive::traits::Identifiable;
@@ -54,6 +57,7 @@ mod command;
 mod commands;
 mod config;
 mod events;
+mod ipc;
 mod library;
 mod playlist;
 mod queue;
@@ -135,6 +139,14 @@ fn main() {
                 .long("basepath")
                 .value_name("PATH")
                 .help("custom basepath to config/cache files")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("ipc-socket")
+                .short("s")
+                .long("ipc-socket")
+                .value_name("PATH")
+                .help("define location of IPC socket")
                 .takes_value(true),
         )
         .get_matches();
@@ -260,6 +272,13 @@ fn main() {
 
     cursive.add_fullscreen_layer(layout.with_id("main"));
 
+    if let Some(socket) = matches.value_of("ipc-socket") {
+        let listener = UnixListener::bind(socket).unwrap();
+
+        thread::spawn(|| spawn_listener(listener));
+        // accept connections and process them, spawning a new thread for each one
+    }
+
     // cursive event loop
     while cursive.is_running() {
         cursive.step();
@@ -276,6 +295,21 @@ fn main() {
                         queue.next(false);
                     }
                 }
+            }
+        }
+    }
+}
+
+fn spawn_listener (listener: UnixListener) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                /* connection succeeded */
+                handle_client(stream) 
+            }
+            Err(err) => {
+                /* connection failed */
+                break;
             }
         }
     }
